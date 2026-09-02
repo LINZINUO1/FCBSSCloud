@@ -1,4 +1,0 @@
-[build]
-  command = "npm install --production"
-  functions = "netlify/functions"  # 指定函数目录
-  publish = "."
