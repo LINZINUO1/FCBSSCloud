@@ -497,27 +497,6 @@
         }
         .virus-list .hash-item .del-btn:hover { opacity: 0.6; }
 
-        .multi-select {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px 14px;
-            align-items: center;
-        }
-        .multi-select label {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 13px;
-            cursor: pointer;
-            color: #4a5a6e;
-        }
-        body.dark-mode .multi-select label { color: #8b949e; }
-        .multi-select input[type="checkbox"] {
-            accent-color: #1e90ff;
-            width: 15px;
-            height: 15px;
-        }
-
         .toggle {
             width: 44px;
             height: 24px;
@@ -607,6 +586,27 @@
         }
         .status-bar .ok { color: #2ecc71; }
         .status-bar .fail { color: #e74c3c; }
+
+        /* 导入区 */
+        .import-zone {
+            border: 2px dashed #dce2ea;
+            padding: 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+            background: transparent;
+            border-radius: 0;
+            margin-top: 8px;
+        }
+        body.dark-mode .import-zone {
+            border-color: #30363d;
+        }
+        .import-zone:hover { border-color: #1e90ff; }
+        .import-zone p {
+            color: #7a8a9e;
+            font-size: 14px;
+        }
+        body.dark-mode .import-zone p { color: #8b949e; }
 
         @media (max-width: 640px) {
             .sidebar { width: 56px; min-width: 56px; padding: 12px 0; }
@@ -721,33 +721,19 @@
                 <div class="toggle active" id="darkToggle"></div>
             </div>
 
-            <!-- 扫描模式 (多选) -->
+            <!-- 外部导入病毒库 (txt) -->
             <div class="setting-row" style="flex-direction:column; align-items:stretch;">
                 <div>
-                    <div class="label">扫描模式 (多选)</div>
-                    <div class="desc">选择要加载的病毒库文件</div>
+                    <div class="label">📥 导入外部病毒库 (.txt)</div>
+                    <div class="desc">每行一个 MD5 哈希值（32位十六进制）</div>
                 </div>
-                <div class="multi-select" id="multiSelectContainer">
-                    <label><input type="checkbox" value="b1"> b1.txt</label>
-                    <label><input type="checkbox" value="b2"> b2.txt</label>
-                    <label><input type="checkbox" value="b5"> b5.txt</label>
-                    <label><input type="checkbox" value="b499"> b499.txt</label>
-                    <label><input type="checkbox" value="custom"> 自定义 (输入下方)</label>
+                <div class="import-zone" id="importZone">
+                    <p>📄 点击选择 .txt 文件 或 拖拽到这里</p>
+                    <input type="file" id="importInput" accept=".txt" style="display:none;">
                 </div>
-                <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap;">
-                    <button class="btn-sm" id="applyMultiSelectBtn">应用选中</button>
-                    <span style="font-size:12px; color:#7a8a9e; align-self:center;">选中后自动合并加载</span>
-                </div>
-            </div>
-
-            <!-- 自定义 API / 病毒库源 -->
-            <div class="setting-row">
-                <div>
-                    <div class="label">自定义病毒库源</div>
-                    <div class="desc">输入 API 地址或文件路径</div>
-                </div>
-                <div class="controls" style="flex:1; min-width:200px;">
-                    <input type="text" id="customApiInput" placeholder="./custom.txt 或 https://..." style="flex:1; min-width:150px;">
+                <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    <span style="font-size:13px; color:#7a8a9e;" id="importStatus">未导入</span>
+                    <button class="btn-sm" id="clearImportedBtn">清空导入的哈希</button>
                 </div>
             </div>
 
@@ -808,6 +794,14 @@
 
 </div>
 
+<!-- ===== 病毒库 JS 文件加载（和官网加载 logo.png 一样的方式） ===== -->
+<!-- 默认加载 b1.js，如果不存在则静默失败 -->
+<script src="b1.js"></script>
+<!-- 也尝试加载其他库 -->
+<script src="b2.js"></script>
+<script src="b5.js"></script>
+<script src="b499.js"></script>
+
 <script>
     // ============================================================
     // 1. 存储键名
@@ -820,9 +814,8 @@
     const DEFAULT_SETTINGS = {
         darkMode: false,
         autoDark: true,
-        scanModes: ['b1'],
-        customApi: '',
-        virusHashes: []
+        virusHashes: [],      // 用户手动添加的哈希
+        importedHashes: []    // 从 txt 导入的哈希
     };
 
     // ============================================================
@@ -848,53 +841,49 @@
     let settings = loadSettings();
 
     // ============================================================
-    // 4. 病毒库管理 — ✅ 从同目录加载 (和 logo.png 一样的方式)
+    // 4. 病毒库管理 — ✅ 从 window.__VIRUS_HASHES__ 读取（由 <script> 加载）
+    //    同时合并 localStorage 中的用户自定义哈希和导入的哈希
     // ============================================================
     let virusHashes = new Set();
 
-    async function loadVirusDatabase() {
-        const modes = settings.scanModes || ['b1'];
-        let hashes = new Set();
+    function loadVirusDatabase() {
+        const hashes = new Set();
 
-        // 用户自定义哈希
-        if (settings.virusHashes && settings.virusHashes.length) {
-            for (const h of settings.virusHashes) {
-                if (/^[a-f0-9]{32}$/.test(h)) hashes.add(h);
+        // 1️⃣ 从 <script> 加载的 JS 文件中读取（b1.js, b2.js 等）
+        if (window.__VIRUS_HASHES__) {
+            for (const key in window.__VIRUS_HASHES__) {
+                const hashList = window.__VIRUS_HASHES__[key];
+                if (Array.isArray(hashList)) {
+                    for (const h of hashList) {
+                        if (/^[a-f0-9]{32}$/.test(h)) {
+                            hashes.add(h);
+                        }
+                    }
+                }
             }
         }
 
-        for (const mode of modes) {
-            let fileUrl = '';
-            if (mode === 'custom' && settings.customApi) {
-                fileUrl = settings.customApi;
-            } else if (mode !== 'custom') {
-                // ✅ 直接引用同目录文件，和官网引用 logo.png 方式一致
-                fileUrl = mode + '.txt';
-            } else {
-                continue;
-            }
-            try {
-                const response = await fetch(fileUrl);
-                if (response.ok) {
-                    const text = await response.text();
-                    const lines = text.split('\n');
-                    for (const line of lines) {
-                        const hash = line.trim().toLowerCase();
-                        if (/^[a-f0-9]{32}$/.test(hash)) {
-                            hashes.add(hash);
-                        }
-                    }
-                    console.log('✅ 加载完成:', fileUrl);
-                } else {
-                    console.warn('⚠️ 无法加载:', fileUrl, '状态:', response.status);
+        // 2️⃣ 从 localStorage 读取用户手动添加的哈希
+        if (settings.virusHashes && settings.virusHashes.length) {
+            for (const h of settings.virusHashes) {
+                if (/^[a-f0-9]{32}$/.test(h)) {
+                    hashes.add(h);
                 }
-            } catch (err) {
-                console.warn('❌ 加载失败:', fileUrl, err.message);
+            }
+        }
+
+        // 3️⃣ 从 localStorage 读取导入的哈希
+        if (settings.importedHashes && settings.importedHashes.length) {
+            for (const h of settings.importedHashes) {
+                if (/^[a-f0-9]{32}$/.test(h)) {
+                    hashes.add(h);
+                }
             }
         }
 
         virusHashes = hashes;
         updateVirusUI();
+        updateImportStatus();
         return { total: virusHashes.size };
     }
 
@@ -931,50 +920,115 @@
             el.addEventListener('click', function() {
                 const hash = this.dataset.hash;
                 if (hash && confirm('删除此哈希？')) {
+                    // 从所有来源删除
                     virusHashes.delete(hash);
-                    settings.virusHashes = Array.from(virusHashes);
+                    // 从 settings 中删除
+                    settings.virusHashes = settings.virusHashes.filter(h => h !== hash);
+                    settings.importedHashes = settings.importedHashes.filter(h => h !== hash);
                     saveSettings(settings);
                     updateVirusUI();
+                    updateImportStatus();
                 }
             });
         });
     }
 
-    // ============================================================
-    // 5. 多选UI同步
-    // ============================================================
-    function syncMultiSelectUI() {
-        const checkboxes = document.querySelectorAll('#multiSelectContainer input[type="checkbox"]');
-        const selected = settings.scanModes || ['b1'];
-        checkboxes.forEach(cb => {
-            cb.checked = selected.includes(cb.value);
-        });
-        document.getElementById('customApiInput').value = settings.customApi || '';
+    function updateImportStatus() {
+        const statusEl = document.getElementById('importStatus');
+        const importedCount = settings.importedHashes ? settings.importedHashes.length : 0;
+        if (importedCount > 0) {
+            statusEl.textContent = `✅ 已导入 ${importedCount} 个哈希`;
+            statusEl.style.color = '#2ecc71';
+        } else {
+            statusEl.textContent = '未导入';
+            statusEl.style.color = '#7a8a9e';
+        }
     }
 
     // ============================================================
-    // 6. 应用多选
+    // 5. 外部导入 .txt 病毒库
     // ============================================================
-    document.getElementById('applyMultiSelectBtn').addEventListener('click', function() {
-        const checkboxes = document.querySelectorAll('#multiSelectContainer input[type="checkbox"]:checked');
-        const selected = Array.from(checkboxes).map(cb => cb.value);
-        if (selected.length === 0) {
-            alert('请至少选择一个模式');
+    const importZone = document.getElementById('importZone');
+    const importInput = document.getElementById('importInput');
+
+    importZone.addEventListener('click', () => importInput.click());
+
+    importZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        importZone.style.borderColor = '#1e90ff';
+    });
+    importZone.addEventListener('dragleave', () => {
+        importZone.style.borderColor = '';
+    });
+    importZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        importZone.style.borderColor = '';
+        if (e.dataTransfer.files.length) {
+            handleImportFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    importInput.addEventListener('change', () => {
+        if (importInput.files.length) {
+            handleImportFile(importInput.files[0]);
+        }
+        importInput.value = '';
+    });
+
+    function handleImportFile(file) {
+        if (!file.name.endsWith('.txt')) {
+            alert('请导入 .txt 格式的文件');
             return;
         }
-        settings.scanModes = selected;
-        if (selected.includes('custom')) {
-            settings.customApi = document.getElementById('customApiInput').value.trim();
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const text = e.target.result;
+            const lines = text.split('\n');
+            const validHashes = [];
+            let invalidCount = 0;
+            for (const line of lines) {
+                const hash = line.trim().toLowerCase();
+                if (/^[a-f0-9]{32}$/.test(hash)) {
+                    validHashes.push(hash);
+                } else if (line.trim() !== '') {
+                    invalidCount++;
+                }
+            }
+            if (validHashes.length === 0) {
+                alert('未找到有效的 MD5 哈希（32位十六进制）');
+                return;
+            }
+
+            // 合并到已导入的哈希中（去重）
+            const existing = new Set(settings.importedHashes || []);
+            for (const h of validHashes) {
+                existing.add(h);
+            }
+            settings.importedHashes = Array.from(existing);
+            saveSettings(settings);
+
+            // 重新加载病毒库
+            loadVirusDatabase();
+            alert(`✅ 成功导入 ${validHashes.length} 个哈希${invalidCount > 0 ? `，${invalidCount} 行被忽略（非有效哈希）` : ''}`);
+        };
+        reader.readAsText(file);
+    }
+
+    document.getElementById('clearImportedBtn').addEventListener('click', function() {
+        if ((settings.importedHashes || []).length === 0) {
+            alert('没有导入的哈希');
+            return;
         }
-        saveSettings(settings);
-        loadVirusDatabase().then(() => {
-            updateVirusUI();
-            alert('✅ 病毒库已重新加载，共 ' + virusHashes.size + ' 个哈希');
-        });
+        if (confirm('清空所有导入的哈希？')) {
+            settings.importedHashes = [];
+            saveSettings(settings);
+            loadVirusDatabase();
+            updateImportStatus();
+        }
     });
 
     // ============================================================
-    // 7. 添加哈希
+    // 6. 添加哈希（手动）
     // ============================================================
     document.getElementById('addHashBtn').addEventListener('click', function() {
         const input = document.getElementById('hashInput');
@@ -988,7 +1042,8 @@
             return;
         }
         virusHashes.add(hash);
-        settings.virusHashes = Array.from(virusHashes);
+        settings.virusHashes = settings.virusHashes || [];
+        settings.virusHashes.push(hash);
         saveSettings(settings);
         updateVirusUI();
         input.value = '';
@@ -1003,36 +1058,34 @@
         if (confirm('确定清空所有病毒库哈希？此操作不可撤销！')) {
             virusHashes.clear();
             settings.virusHashes = [];
+            settings.importedHashes = [];
             saveSettings(settings);
             updateVirusUI();
+            updateImportStatus();
         }
     });
 
     document.getElementById('reloadVirusBtn').addEventListener('click', function() {
-        loadVirusDatabase().then(() => {
-            updateVirusUI();
-            alert('病毒库已重新加载，共 ' + virusHashes.size + ' 个哈希');
-        });
+        loadVirusDatabase();
+        alert('病毒库已重新加载，共 ' + virusHashes.size + ' 个哈希');
     });
 
     // ============================================================
-    // 8. 扫描页刷新按钮
+    // 7. 扫描页刷新按钮
     // ============================================================
     document.getElementById('scanRefreshBtn').addEventListener('click', function() {
-        loadVirusDatabase().then(() => {
-            updateVirusUI();
-            const resultBox = document.getElementById('resultBox');
-            resultBox.style.display = 'block';
-            resultBox.className = 'result-box';
-            document.getElementById('resultLabel').textContent = '🔄 病毒库已刷新';
-            document.getElementById('resultLabel').style.color = '#1e90ff';
-            document.getElementById('resultDetail').textContent = '共 ' + virusHashes.size + ' 个哈希';
-            document.getElementById('resultMeta').textContent = '最后更新: ' + new Date().toLocaleTimeString();
-        });
+        loadVirusDatabase();
+        const resultBox = document.getElementById('resultBox');
+        resultBox.style.display = 'block';
+        resultBox.className = 'result-box';
+        document.getElementById('resultLabel').textContent = '🔄 病毒库已刷新';
+        document.getElementById('resultLabel').style.color = '#1e90ff';
+        document.getElementById('resultDetail').textContent = '共 ' + virusHashes.size + ' 个哈希';
+        document.getElementById('resultMeta').textContent = '最后更新: ' + new Date().toLocaleTimeString();
     });
 
     // ============================================================
-    // 9. 扫描逻辑
+    // 8. 扫描逻辑
     // ============================================================
     const modeBtns = document.querySelectorAll('.scan-option-btn');
     const fileInput = document.getElementById('fileInput');
@@ -1100,7 +1153,7 @@
     }
 
     // ============================================================
-    // 10. 脚本关键词检测
+    // 9. 脚本关键词检测
     // ============================================================
     const SCRIPT_KEYWORDS = {
         js: [
@@ -1162,7 +1215,7 @@
     }
 
     // ============================================================
-    // 11. 执行扫描
+    // 10. 执行扫描
     // ============================================================
     scanBtn.addEventListener('click', async () => {
         if (!selectedFiles.length) return;
@@ -1225,7 +1278,7 @@
     });
 
     // ============================================================
-    // 12. 导航切换
+    // 11. 导航切换
     // ============================================================
     const navItems = document.querySelectorAll('.nav-item');
     const pages = {
@@ -1245,13 +1298,13 @@
             });
             if (page === 'settings') {
                 updateVirusUI();
-                syncMultiSelectUI();
+                updateImportStatus();
             }
         });
     });
 
     // ============================================================
-    // 13. 暗色模式
+    // 12. 暗色模式
     // ============================================================
     const darkToggle = document.getElementById('darkToggle');
     const body = document.body;
@@ -1282,10 +1335,9 @@
     });
 
     // ============================================================
-    // 14. 保存设置
+    // 13. 保存 / 重置
     // ============================================================
     document.getElementById('saveSettingsBtn').addEventListener('click', function() {
-        settings.virusHashes = Array.from(virusHashes);
         saveSettings(settings);
         alert('设置已保存到本地浏览器');
     });
@@ -1298,15 +1350,18 @@
     });
 
     // ============================================================
-    // 15. 初始化
+    // 14. 初始化
     // ============================================================
-    async function init() {
-        syncMultiSelectUI();
-        await loadVirusDatabase();
-        updateVirusUI();
+    function init() {
+        loadVirusDatabase();
+        updateImportStatus();
         console.log('✅ FCBSS Cloud 已加载');
-        console.log('📁 扫描模式:', settings.scanModes);
-        console.log('🔢 病毒哈希数:', virusHashes.size);
+        console.log('📁 病毒哈希数:', virusHashes.size);
+        if (window.__VIRUS_HASHES__) {
+            console.log('📚 已加载的 JS 病毒库:', Object.keys(window.__VIRUS_HASHES__));
+        }
+        console.log('📥 导入的哈希数:', (settings.importedHashes || []).length);
+        console.log('✏️ 手动添加的哈希数:', (settings.virusHashes || []).length);
     }
 
     init();
