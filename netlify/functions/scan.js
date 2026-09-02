@@ -2,7 +2,7 @@ const VIRUSSHARE_BASE = 'https://virusshare.com/hashfiles/';
 const SCAN_FILES = [1, 2, 3, 4, 5];
 
 exports.handler = async (event) => {
-    // 1. 只接受 POST
+    // 1. 只接受 POST 请求
     if (event.httpMethod !== 'POST') {
         return {
             statusCode: 405,
@@ -24,7 +24,7 @@ exports.handler = async (event) => {
         };
     }
 
-    // 3. 验证 MD5（32位十六进制）
+    // 3. 验证 MD5 格式（32位十六进制）
     if (!/^[a-f0-9]{32}$/.test(md5)) {
         return {
             statusCode: 400,
@@ -58,7 +58,7 @@ exports.handler = async (event) => {
     // 5. 判断结果
     const isThreat = allHashes.has(md5);
 
-    // 6. 返回
+    // 6. 返回结果
     return {
         statusCode: 200,
         headers: {
